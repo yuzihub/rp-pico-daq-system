@@ -8,6 +8,8 @@
 
 // ------------------------- Declare Constants ------------------------- //
 
+#define spi0   ((spi_inst_t *)spi0_hw)
+
 #define BMI160_COMMAND_REG_ADDR    UINT8_C(0x7E)
 #define BMI160_SOFT_RESET_CMD      UINT8_C(0xb6)
 #define BMI160_RA_CMD               0x7E
@@ -23,21 +25,26 @@ const uint8_t BMI_addr_1 = 0x69; // I2C address of the MPU-6050 with SDO pin HIG
 const int BMI160_SOFT_RESET_DELAY_MS = 15;
 
 typedef enum {
-    BMI160_ACCEL_RANGE_2G  = 0X03, /**<  +/-  2g range */
-    BMI160_ACCEL_RANGE_4G  = 0X05, /**<  +/-  4g range */
-    BMI160_ACCEL_RANGE_8G  = 0X08, /**<  +/-  8g range */
-    BMI160_ACCEL_RANGE_16G = 0X0C, /**<  +/- 16g range */
+  BMI160_ACCEL_RANGE_2G  = 0X03, /**<  +/-  2g range */
+  BMI160_ACCEL_RANGE_4G  = 0X05, /**<  +/-  4g range */
+  BMI160_ACCEL_RANGE_8G  = 0X08, /**<  +/-  8g range */
+  BMI160_ACCEL_RANGE_16G = 0X0C, /**<  +/- 16g range */
 } BMI160AccelRange;
 
 typedef enum {
-    BMI160_GYRO_RANGE_2000 = 0, /**<  +/- 2000 degrees/second */
-    BMI160_GYRO_RANGE_1000,     /**<  +/- 1000 degrees/second */
-    BMI160_GYRO_RANGE_500,      /**<  +/-  500 degrees/second */
-    BMI160_GYRO_RANGE_250,      /**<  +/-  250 degrees/second */
-    BMI160_GYRO_RANGE_125,      /**<  +/-  125 degrees/second */
+  BMI160_GYRO_RANGE_2000 = 0, /**<  +/- 2000 degrees/second */
+  BMI160_GYRO_RANGE_1000,     /**<  +/- 1000 degrees/second */
+  BMI160_GYRO_RANGE_500,      /**<  +/-  500 degrees/second */
+  BMI160_GYRO_RANGE_250,      /**<  +/-  250 degrees/second */
+  BMI160_GYRO_RANGE_125,      /**<  +/-  125 degrees/second */
 } BMI160GyroRange;
 
-float gyr_x, gyr_y, gyr_z, acc_x, acc_y, acc_z;
+//typedef enum{
+//  GPIO_SLEW_RATE_SLOW;
+//  GPIO_SLEW_RATE_FAST;
+//}
+
+float gyr_x, gyr_y, gyr_z, acc_x, acc_y, acc_z = 0;
 
 
 const int ISRStart = 6;
@@ -61,8 +68,26 @@ const int SPISckPin = 18;
 const int ADCbits = 12;
 uint SPIbaudrate = 50000000;
 
-SdFat sd; //SdFat instance
-SdFile myFile; //file initialization
+
+//#if SD_FAT_TYPE == 0
+//SdFat sd;
+//typedef File file_t;
+//#elif SD_FAT_TYPE == 1
+//SdFat32 sd;
+//typedef File32 file_t;
+//#elif SD_FAT_TYPE == 2
+//SdExFat sd;
+//typedef ExFile file_t;
+//#elif SD_FAT_TYPE == 3
+//SdFs sd;
+//typedef FsFile file_t;
+//#else  // SD_FAT_TYPE
+//#error Invalid SD_FAT_TYPE
+//#endif  // SD_FAT_TYPE
+
+typedef File32 file_t;
+SdFat32 sd; //SdFat instance
+file_t myFile; //file initialization
 
 const int imuArrSize = 6;
 const int micArrSize = 200;
@@ -82,9 +107,9 @@ struct datastore {
 
 
 
-
+const size_t FIFO_SIZE_BYTES = 16 * 512;
 //longest file name we can give so that we can change it without errors when name it with the help of RTC
-char fileName[] = "10-10-1900-24-00-00.txt";
+char fileName[] = "10-10-1900-24-00-00.bin";
 struct ts t;
 
 //flags we set in interrupts
@@ -111,7 +136,7 @@ struct datastore myData;
 
 struct repeating_timer ADCtimer;
 bool sdRecordFlag = false;
-
+bool sd_Error = false;
 
 void setup(void) {
 
@@ -124,20 +149,42 @@ void setup(void) {
   pinMode(YellowLED, OUTPUT);
   pinMode(RedLED, OUTPUT);
   pinMode(pain_ind_pin, INPUT);
-  
-  pinMode(23, OUTPUT); //enables power supply to PWM mode to reduce ripple
-  gpio_put(23, HIGH);
+
+  //  pinMode(23, OUTPUT); //enables power supply to PWM mode to reduce ripple
+  //  gpio_put(23, HIGH);
+  //  gpio_pull_up(23);
 
   pinMode(mpu1Pin, OUTPUT);
   pinMode(mpu2Pin, OUTPUT);
   gpio_put(mpu1Pin, LOW);
   gpio_put(mpu2Pin, LOW);
-  
+
+  //  spi_set_format(spi0, 8, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
+
   bool setRX(pin_size_t SPIMisoPin);
   bool setCS(pin_size_t chipSelectSD);
   bool setSCK(pin_size_t SPISckPin);
   bool setTX(pin_size_t SPIMosiPin);
 
+
+  //  gpio_set_function(4,GPIO_FUNC_I2C);
+  //  gpio_set_function(5,GPIO_FUNC_I2C);
+  //
+  //  gpio_set_slew_rate(4, GPIO_SLEW_RATE_SLOW);
+  //  gpio_set_slew_rate(5, GPIO_SLEW_RATE_SLOW);
+  //
+  //  gpio_set_drive_strength(4, GPIO_DRIVE_STRENGTH_2MA);
+  //  gpio_set_drive_strength(5, GPIO_DRIVE_STRENGTH_2MA);
+
+  gpio_set_slew_rate(SPIMisoPin, GPIO_SLEW_RATE_SLOW);
+  gpio_set_slew_rate(chipSelectSD, GPIO_SLEW_RATE_SLOW);
+  gpio_set_slew_rate(SPISckPin, GPIO_SLEW_RATE_SLOW);
+  gpio_set_slew_rate(SPIMosiPin, GPIO_SLEW_RATE_SLOW);
+
+  gpio_set_drive_strength(SPIMisoPin, GPIO_DRIVE_STRENGTH_2MA);
+  gpio_set_drive_strength(chipSelectSD, GPIO_DRIVE_STRENGTH_2MA);
+  gpio_set_drive_strength(SPISckPin, GPIO_DRIVE_STRENGTH_2MA);
+  gpio_set_drive_strength(SPIMosiPin, GPIO_DRIVE_STRENGTH_2MA);
 
   adc_init();
   adc_set_clkdiv(0);
@@ -161,20 +208,11 @@ void setup(void) {
   Serial.println("Serial Connected");
   DS3231_init(DS3231_CONTROL_INTCN);
 
-  Serial.print("Initializing SD card...");
+  //  Serial.print("Initializing SD card...");
+  sd_Init();
 
-  while (!sd.begin(chipSelectSD, SPIbaudrate)) {//SD initialization
-    Serial.println("SD initialization failed!");
-    //Signaling the user with LEDs that initialization failed.
-    gpio_put(YellowLED, HIGH);
-    gpio_put(RedLED, HIGH);
-    sleep_ms(100);
-  }
+  //Serial.println("SD initialization done.");
 
-  gpio_put(YellowLED, LOW);
-  gpio_put(RedLED, LOW);
-  Serial.println("SD initialization done.");
-  
   gpio_put(mpu1Pin, HIGH);
   BMI160_init(BMI160_GYRO_RANGE_250, BMI160_ACCEL_RANGE_2G);
   gpio_put(mpu1Pin, LOW);
@@ -184,15 +222,9 @@ void setup(void) {
   gpio_put(mpu2Pin, LOW);
 
   //Signaling the user with LEDs that initialization succeeded.
-  gpio_put(GreenLED, HIGH);
-  sleep_ms(1000);
-  gpio_put(GreenLED, LOW);
-  sleep_ms(1000);
-  gpio_put(GreenLED, HIGH);
-  sleep_ms(1000);
-  gpio_put(GreenLED, LOW);
+  ok_LED();
   micDataCounter = 0;
-//  painInd = 0;
+  //  painInd = 0;
 
   add_repeating_timer_us(-50, repeating_timer_callback, NULL, &ADCtimer); //adding timer interrupt for adc
   //The timer interrupt repeats every 50us, allowing us to call a callback function 20000 times every second.
@@ -208,7 +240,7 @@ void loop() {
       }
 
       DS3231_get(&t); //get the time from RTC and make it the name of the file
-      String tempFileName = String(t.mday) + "-" + String(t.mon) + "-" + String(t.year) + "-" + String(t.hour) + "-" + String(t.min) + "-" + String(t.sec) + ".txt";
+      String tempFileName = String(t.mday) + "-" + String(t.mon) + "-" + String(t.year) + "-" + String(t.hour) + "-" + String(t.min) + "-" + String(t.sec) + ".bin";
       tempFileName.toCharArray(fileName, sizeof(fileName)); //convert string to char array
 
       if (sd.exists(fileName)) {//if a file with the same name exists
@@ -222,7 +254,7 @@ void loop() {
         Serial.println("File does not exist!");
       }
 
-      myFile.open(fileName, O_RDWR | O_CREAT | O_AT_END); //open the file with these settings for faster write speeds
+      myFile.open(fileName, O_WRONLY | O_CREAT); //open the file with these settings for faster write speeds
       createFileFlag = false; //set createFileFlag to false to prevent creating a new file unless requested
     }
     if (!pauseRecFlag) {//if not paused
@@ -231,46 +263,32 @@ void loop() {
       }
 
       if (sdRecordFlag) {//with the timer interrupt we make sure to get into this statement every 10ms
-						 //ensuring that BMI160 is read roughly at 100 Hz
-                      gpio_put(mpu1Pin, HIGH);
-                      bmi160_read();
-                      gpio_put(mpu1Pin, LOW);
-                      myData.imuArm[0] = gyr_x;
-                      myData.imuArm[1] = gyr_y;
-                      myData.imuArm[2] = gyr_z;
-                      myData.imuArm[3] = acc_x;
-                      myData.imuArm[4] = acc_y;
-                      myData.imuArm[5] = acc_z;
+        //ensuring that BMI160 is read roughly at 100 Hz
 
-                      gpio_put(mpu2Pin, HIGH);
-                      bmi160_read();
-                      gpio_put(mpu2Pin, LOW);
-                      myData.imuBack[0] = gyr_x;
-                      myData.imuBack[1] = gyr_y;
-                      myData.imuBack[2] = gyr_z;
-                      myData.imuBack[3] = acc_x;
-                      myData.imuBack[4] = acc_y;
-                      myData.imuBack[5] = acc_z;
-                      
-          if(gpio_get(pain_ind_pin) != 0){
-            myData.painInd = 1;
-          }else{
-            myData.painInd = 0;
+        log_IMU_Arm_Data();
+        log_IMU_Back_Data();
+        get_Pain_Ind();
+        log_Mic_Data();
+
+        if (myFile && !(!myFile.sync() || myFile.getWriteError())) {//if file is open
+          //unsigned long timeStamp = micros();
+          myFile.write((const uint8_t *)&myData, sizeof(myData)); //write to file
+          //timeStamp = micros() - timeStamp;
+          //Serial.println(timeStamp);
+          sdRecordFlag = false;
+          //Serial.write((const uint8_t *)&myData, sizeof(myData)); //send data to bluetooth via serial
+        } else {//if file is not open
+          sd_Error = true;
+          //Serial.println("error opening file"); //print error
+          error_LED_on();
+          while (sd_Error) {
+            if (myFile) {
+              myFile.close();
+            }
+            sd_Init();
           }
-
-          micInterruptFlag = false;
-          std::copy(tempMicArmData, tempMicArmData + micArrSize, myData.micArm);
-          std::copy(tempMicBackData, tempMicBackData + micArrSize, myData.micBack);
-          micInterruptFlag = true;
-
-          if (myFile) {//if file is open
-            myFile.write((const uint8_t *)&myData, sizeof(myData)); //write to file
-            sdRecordFlag = false;
-            //Serial.write((const uint8_t *)&myData, sizeof(myData)); //send data to bluetooth via serial
-          } else {//if file is not open
-            Serial.println("error opening file"); //print error
-            while (1);
-          }
+          error_LED_off();
+        }
       }
     }
   } else {
@@ -299,6 +317,7 @@ void button_ISR_start() {//interrupt with button for starting recording in a new
     stopRecFlag = false;
     setTimersFlag = true;
     micInterruptFlag = true;
+    sd_Error = false;
     gpio_put(GreenLED, HIGH);
     gpio_put(YellowLED, LOW);
     gpio_put(RedLED, LOW);
@@ -415,7 +434,7 @@ void set_accel_range(uint8_t range) {
   Wire.endTransmission(true);
 }
 
-void bmi160_read(){
+void bmi160_read() {
   //int imu_data[6];
   Wire.beginTransmission(BMI_addr_1);
   Wire.write(0x0C);  // starting with register 0x0C. (GYRO)
@@ -427,4 +446,75 @@ void bmi160_read(){
   acc_x = Wire.read() | Wire.read() << 8;
   acc_y = Wire.read() | Wire.read() << 8;
   acc_z = Wire.read() | Wire.read() << 8;
+}
+
+void log_IMU_Arm_Data() {
+  gpio_put(mpu1Pin, HIGH);
+  bmi160_read();
+  gpio_put(mpu1Pin, LOW);
+  myData.imuArm[0] = gyr_x;
+  myData.imuArm[1] = gyr_y;
+  myData.imuArm[2] = gyr_z;
+  myData.imuArm[3] = acc_x;
+  myData.imuArm[4] = acc_y;
+  myData.imuArm[5] = acc_z;
+}
+
+void log_IMU_Back_Data() {
+  gpio_put(mpu2Pin, HIGH);
+  bmi160_read();
+  gpio_put(mpu2Pin, LOW);
+  myData.imuBack[0] = gyr_x;
+  myData.imuBack[1] = gyr_y;
+  myData.imuBack[2] = gyr_z;
+  myData.imuBack[3] = acc_x;
+  myData.imuBack[4] = acc_y;
+  myData.imuBack[5] = acc_z;
+}
+
+void log_Mic_Data() {
+  micInterruptFlag = false;
+  std::copy(tempMicArmData, tempMicArmData + micArrSize, myData.micArm);
+  std::copy(tempMicBackData, tempMicBackData + micArrSize, myData.micBack);
+  micInterruptFlag = true;
+}
+
+void get_Pain_Ind() {
+  if (gpio_get(pain_ind_pin) != 0) {
+    myData.painInd = 1;
+  } else {
+    myData.painInd = 0;
+  }
+}
+
+void error_LED_on() {
+  gpio_put(GreenLED, LOW);
+  gpio_put(YellowLED, HIGH);
+  gpio_put(RedLED, HIGH);
+}
+
+void error_LED_off() {
+  gpio_put(YellowLED, LOW);
+  gpio_put(RedLED, LOW);
+}
+
+void ok_LED() {
+  gpio_put(GreenLED, HIGH);
+  sleep_ms(1000);
+  gpio_put(GreenLED, LOW);
+  sleep_ms(1000);
+  gpio_put(GreenLED, HIGH);
+  sleep_ms(1000);
+  gpio_put(GreenLED, LOW);
+}
+
+void sd_Init() {
+  while (!sd.begin(chipSelectSD, SPIbaudrate)) {//SD initialization
+    //Serial.println("SD initialization failed!");
+    //Signaling the user with LEDs that initialization failed.
+    error_LED_on();
+    sleep_ms(100);
+  }
+  error_LED_off();
+  sd_Error = false;
 }
